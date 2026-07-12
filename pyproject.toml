@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transcript-intelligence"
+version = "0.1.0"
+description = "Batch transcript analytics for topics, sentiment, and findings"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "bertopic",
+  "hdbscan",
+  "numpy",
+  "openai",
+  "pandas",
+  "plotly",
+  "presidio-analyzer",
+  "pydantic",
+  "pydantic-settings",
+  "python-dotenv",
+  "scikit-learn",
+  "sentence-transformers",
+  "spacy",
+  "structlog",
+  "typer",
+  "umap-learn",
+]
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-asyncio", "ruff"]
+
+[project.scripts]
+transcript-intelligence = "transcript_intelligence.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 88
