@@ -54,7 +54,7 @@ class Execution:
             latest = cls(existing[-1])
             if latest.state.get("status") != "complete":
                 log.info(
-                    "resuming_execution",
+                    "resuming incomplete execution",
                     path=str(latest.directory),
                 )
                 return latest
@@ -65,7 +65,7 @@ class Execution:
         directory.mkdir(parents=True, exist_ok=False)
         execution = cls(directory)
         execution.save()
-        log.info("allocated_execution", path=str(directory))
+        log.info("created new execution", path=str(directory))
         return execution
 
     def save(self) -> None:

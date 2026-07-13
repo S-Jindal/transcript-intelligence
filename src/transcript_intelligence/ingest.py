@@ -93,7 +93,7 @@ def ingest_transcripts(input_directory: Path, stage_dir: Path) -> list[Transcrip
     write_jsonl(stage_dir / "transcripts.jsonl", records)
     write_jsonl(stage_dir / "utterances.jsonl", utterances)
     log.info(
-        "ingest_complete",
+        "ingest finished",
         transcripts=len(records),
         utterances=len(utterances),
     )

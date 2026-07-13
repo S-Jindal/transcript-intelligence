@@ -68,7 +68,7 @@ async def _classify_one(
                     raise
                 delay = settings.llm_initial_backoff_seconds * (2**attempt)
                 log.warning(
-                    "classify_retry",
+                    "classify call failed, retrying",
                     transcript_id=transcript_id,
                     attempt=attempt + 1,
                     error=str(error),
@@ -103,10 +103,10 @@ async def classify_transcripts(
         results.append(result)
         done += 1
         if done % 10 == 0 or done == len(tasks):
-            log.info("classify_progress", done=done, total=len(tasks))
+            log.info("classify progress", done=done, total=len(tasks))
     low = sum(item.low_confidence for item in results)
     log.info(
-        "classify_complete",
+        "classify finished",
         transcripts=len(results),
         low_confidence=low,
         threshold=settings.classify_confidence_threshold,

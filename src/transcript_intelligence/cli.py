@@ -36,7 +36,7 @@ def main(
     log = get_logger(__name__)
     settings = Settings()
     log.info(
-        "pipeline_start",
+        "starting pipeline",
         input=str(input_directory),
         output=str(output_directory),
         model=settings.llm_model,
@@ -59,7 +59,7 @@ def main(
         output_directory,
         dependencies,
     )
-    log.info("done", execution=str(result.directory))
+    log.info("pipeline finished", execution=str(result.directory))
 
 
 def app() -> None:

@@ -84,4 +84,4 @@ def write_charts(metrics: list[Metric], stage_dir: Path) -> None:
             px.bar(**kwargs).write_html(str(path), include_plotlyjs="cdn")
         manifest[metric_type] = f"html/{metric_type}.html"
     write_json(stage_dir / "chart_manifest.json", manifest)
-    log.info("analytics_complete", charts=len(manifest))
+    log.info("charts written", charts=len(manifest))

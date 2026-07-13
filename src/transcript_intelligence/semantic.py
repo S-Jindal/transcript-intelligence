@@ -22,7 +22,7 @@ log = get_logger(__name__)
 
 
 def load_embedding_model(model_name: str, device: str) -> SentenceTransformer:
-    log.info("loading_embedding_model", model=model_name, device=device)
+    log.info("loading embedding model", model=model_name, device=device)
     return SentenceTransformer(model_name, device=device)
 
 
@@ -100,7 +100,7 @@ def create_segments(
         if current:
             segments.append(_build_segment(transcript_id, segments, current))
 
-    log.info("segments_complete", segments=len(segments))
+    log.info("segmentation finished", segments=len(segments))
     return segments
 
 
@@ -148,7 +148,7 @@ def embed_segments(
             for index, segment in enumerate(segments)
         ],
     )
-    log.info("embeddings_complete", rows=len(segments))
+    log.info("embeddings finished", rows=len(segments))
     return matrix
 
 
@@ -169,7 +169,7 @@ def _fit_scope(
 ]:
     if len(scope_segments) < settings.minimum_cluster_size:
         log.warning(
-            "clustering_skipped_small_scope",
+            "skipping clustering, too few segments",
             scope=scope_name,
             segments=len(scope_segments),
         )
@@ -284,7 +284,7 @@ def _fit_scope(
     try:
         model.visualize_topics().write_html(str(viz_dir / "topics.html"))
     except Exception as error:
-        log.warning("topic_viz_failed", scope=scope_name, error=str(error))
+        log.warning("topic chart failed", scope=scope_name, error=str(error))
 
     return assignments, metadata, terms, centroids, examples
 
@@ -360,7 +360,7 @@ def cluster_segments(
         all_centroids,
     )
     log.info(
-        "clustering_complete",
+        "clustering finished",
         assignments=len(all_assignments),
         topics=len([item for item in all_metadata if not item.is_outlier]),
     )

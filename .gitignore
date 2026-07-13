@@ -2,10 +2,10 @@
 __pycache__/
 .pytest_cache/
 *.py[cod]
-execution_*/
 .DS_Store
 .env
 *.egg-info/
 dist/
 build/
 interview-assignment/*.pdf
+executions/

@@ -17,6 +17,7 @@ from transcript_intelligence.models import (
     TopicLabel,
     TopicTerm,
 )
+from transcript_intelligence.quote_match import locate_quote
 
 log = get_logger(__name__)
 
@@ -41,13 +42,14 @@ class FindingsResponse(BaseModel):
 
 
 TOPIC_INSTRUCTIONS = """
-Name the topic using the ranked terms and example redacted segments.
+We're performing topic modeling on a set of redacted transcripts with interactions between customers and account managers or sales staff.
+Name the cluster topic using the ranked terms and example segments from the same cluster.
 Return a concise business label and one-sentence description.
 Do not invent details absent from the evidence.
 """.strip()
 
 FINDINGS_INSTRUCTIONS = """
-Extract sentiment and business findings from the redacted segment.
+Extract sentiment and business findings from the redacted segment of transcript with interactions between customers and account managers or sales staff.
 Valence values must be positive or negative (treat uncertainty as negative).
 Allowed finding_type values include:
 sentiment, customer_effort, frustration, resolution, objection,
@@ -82,7 +84,7 @@ async def _parse_with_retries(
                 raise
             delay = settings.llm_initial_backoff_seconds * (2**attempt)
             log.warning(
-                "llm_retry",
+                "LLM call failed, retrying",
                 request_id=request_id,
                 attempt=attempt + 1,
                 error=str(error),
@@ -121,11 +123,9 @@ async def label_topics(
             if segment_id in segments_by_id
         )
         prompt = (
-            f"cluster_id={cluster.cluster_id}\n"
-            f"size={cluster.cluster_size}\n"
-            f"sources={cluster.source_distribution}\n"
-            f"terms={topic_terms}\n\n"
-            f"examples:\n{examples}"
+            f"cluster size={cluster.cluster_size}\n"
+            f"terms={topic_terms}\n"
+            f"example segments:\n{examples}"
         )
         async with semaphore:
             parsed = await _parse_with_retries(
@@ -157,9 +157,9 @@ async def label_topics(
     for task in asyncio.as_completed(tasks):
         labels.append(await task)
         done += 1
-        log.info("topic_label_progress", done=done, total=len(tasks))
+        log.info("topic labeling progress", done=done, total=len(tasks))
     write_jsonl(stage_dir / "topics.jsonl", labels)
-    log.info("topic_labels_complete", topics=len(labels))
+    log.info("topic labeling finished", topics=len(labels))
     return labels
 
 
@@ -194,14 +194,19 @@ async def extract_findings(
         findings: list[Finding] = []
         evidence: list[EvidenceSpan] = []
         for index, item in enumerate(parsed.findings):
-            start = segment.text.find(item.quote)
-            if start < 0 or not item.quote.strip():
+            match = locate_quote(
+                segment.text,
+                item.quote,
+                settings.quote_max_edit_distance,
+            )
+            if match is None:
                 log.warning(
-                    "finding_quote_mismatch",
+                    "finding quote not found in segment, skipping",
                     segment_id=segment.segment_id,
                     finding_type=item.finding_type,
                 )
                 continue
+            matched_quote = segment.text[match.start : match.end]
             finding_id = f"{segment.segment_id}:finding:{index}"
             evidence_id = f"{finding_id}:evidence"
             findings.append(
@@ -228,9 +233,9 @@ async def extract_findings(
                     finding_id=finding_id,
                     segment_id=segment.segment_id,
                     transcript_id=segment.transcript_id,
-                    quote=item.quote,
-                    start=start,
-                    end=start + len(item.quote),
+                    quote=matched_quote,
+                    start=match.start,
+                    end=match.end,
                     turn_ids=segment.turn_ids,
                 )
             )
@@ -247,14 +252,14 @@ async def extract_findings(
         done += 1
         if done % 20 == 0 or done == len(tasks):
             log.info(
-                "findings_progress",
+                "findings progress",
                 done=done,
                 total=len(tasks),
             )
     write_jsonl(stage_dir / "findings.jsonl", all_findings)
     write_jsonl(stage_dir / "evidence.jsonl", all_evidence)
     log.info(
-        "findings_complete",
+        "findings extraction finished",
         findings=len(all_findings),
         evidence=len(all_evidence),
     )

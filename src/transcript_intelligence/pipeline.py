@@ -54,18 +54,18 @@ class PipelineDependencies:
 
 def _run_stage(execution: Execution, stage: str, work) -> None:
     if execution.is_complete(stage):
-        log.info("stage_skipped", stage=stage)
+        log.info("skipping completed stage", stage=stage)
         return
-    log.info("stage_start", stage=stage)
+    log.info("starting stage", stage=stage)
     execution.mark(stage, StageStatus.running)
     try:
         work()
     except Exception:
         execution.mark(stage, StageStatus.failed)
-        log.exception("stage_failed", stage=stage)
+        log.exception("stage failed", stage=stage)
         raise
     execution.mark(stage, StageStatus.complete)
-    log.info("stage_complete", stage=stage)
+    log.info("stage finished", stage=stage)
 
 
 def run_pipeline(
@@ -135,7 +135,7 @@ def run_pipeline(
         write_jsonl(stage_dir / "redacted_utterances.jsonl", redacted)
         write_jsonl(stage_dir / "review_queue.jsonl", reviews)
         log.info(
-            "privacy_complete",
+            "privacy redaction finished",
             transcripts=len(pseudonymized),
             review_flags=len(reviews),
         )
@@ -298,7 +298,7 @@ def run_pipeline(
         write_jsonl(stage_dir / "metrics.jsonl", metrics)
         write_jsonl(stage_dir / "metric_contributors.jsonl", contributors)
         log.info(
-            "aggregation_complete",
+            "aggregation finished",
             metrics=len(metrics),
             contributors=len(contributors),
         )
@@ -314,5 +314,5 @@ def run_pipeline(
 
     _run_stage(execution, "analytics", analytics)
     execution.mark_complete()
-    log.info("pipeline_complete", path=str(execution.directory))
+    log.info("pipeline finished", path=str(execution.directory))
     return execution

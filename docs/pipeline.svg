@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" role="img" aria-labelledby="title desc">
+  <title id="title">Transcript Intelligence pipeline overview</title>
+  <desc id="desc">High-level flow from local ingest and PII through topics, LLM findings, and evidence-linked charts.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <style>
+      .lane { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1; }
+      .box { fill: #ffffff; stroke: #334155; stroke-width: 1.4; }
+      .local { fill: #eff6ff; stroke: #1d4ed8; stroke-width: 1.4; }
+      .llm { fill: #fdf4ff; stroke: #7e22ce; stroke-width: 1.4; }
+      .out { fill: #ecfdf5; stroke: #047857; stroke-width: 1.4; }
+      .title { font: 700 18px "IBM Plex Sans", "Segoe UI", sans-serif; fill: #0f172a; }
+      .label { font: 600 12px "IBM Plex Sans", "Segoe UI", sans-serif; fill: #0f172a; }
+      .sub { font: 11px "IBM Plex Sans", "Segoe UI", sans-serif; fill: #475569; }
+      .edge { stroke: #334155; stroke-width: 1.4; fill: none; marker-end: url(#arrow); }
+      .legend { font: 11px "IBM Plex Sans", "Segoe UI", sans-serif; fill: #334155; }
+    </style>
+  </defs>
+
+  <rect width="960" height="320" fill="#ffffff"/>
+  <text x="28" y="34" class="title">Transcript Intelligence pipeline</text>
+  <text x="28" y="54" class="sub">Local processing first; cloud LLM only after PII. Outputs are JSONL lineage plus Plotly HTML.</text>
+
+  <!-- boxes -->
+  <rect class="local" x="28" y="90" width="120" height="70" rx="8"/>
+  <text x="88" y="120" text-anchor="middle" class="label">Ingest</text>
+  <text x="88" y="138" text-anchor="middle" class="sub">JSON + dates</text>
+
+  <rect class="local" x="168" y="90" width="120" height="70" rx="8"/>
+  <text x="228" y="120" text-anchor="middle" class="label">Privacy</text>
+  <text x="228" y="138" text-anchor="middle" class="sub">Presidio / regex</text>
+
+  <rect class="llm" x="308" y="90" width="120" height="70" rx="8"/>
+  <text x="368" y="120" text-anchor="middle" class="label">Classify</text>
+  <text x="368" y="138" text-anchor="middle" class="sub">call type (LLM)</text>
+
+  <rect class="local" x="448" y="90" width="120" height="70" rx="8"/>
+  <text x="508" y="112" text-anchor="middle" class="label">Turns ’</text>
+  <text x="508" y="128" text-anchor="middle" class="label">Segments</text>
+  <text x="508" y="146" text-anchor="middle" class="sub">BGE embeddings</text>
+
+  <rect class="local" x="588" y="90" width="120" height="70" rx="8"/>
+  <text x="648" y="112" text-anchor="middle" class="label">Topics</text>
+  <text x="648" y="128" text-anchor="middle" class="label">BERTopic</text>
+  <text x="648" y="146" text-anchor="middle" class="sub">+ LLM labels</text>
+
+  <rect class="llm" x="728" y="90" width="100" height="70" rx="8"/>
+  <text x="778" y="120" text-anchor="middle" class="label">Findings</text>
+  <text x="778" y="138" text-anchor="middle" class="sub">sentiment LLM</text>
+
+  <rect class="out" x="848" y="90" width="90" height="70" rx="8"/>
+  <text x="893" y="120" text-anchor="middle" class="label">Charts</text>
+  <text x="893" y="138" text-anchor="middle" class="sub">+ lineage</text>
+
+  <!-- arrows -->
+  <path class="edge" d="M148 125 H168"/>
+  <path class="edge" d="M288 125 H308"/>
+  <path class="edge" d="M428 125 H448"/>
+  <path class="edge" d="M568 125 H588"/>
+  <path class="edge" d="M708 125 H728"/>
+  <path class="edge" d="M828 125 H848"/>
+
+  <!-- second row note -->
+  <rect class="lane" x="28" y="190" width="910" height="78" rx="8"/>
+  <text x="48" y="218" class="label">Dual topic spaces</text>
+  <text x="48" y="238" class="sub">customer-support * account-manager share one BERTopic model; internal-discuss is clustered separately.</text>
+  <text x="48" y="256" class="sub">Sentiment / business findings run only on the two customer-facing call types. Every chart point links back to segments via JSONL.</text>
+
+  <!-- legend -->
+  <rect class="local" x="28" y="284" width="14" height="14" rx="2"/>
+  <text x="48" y="295" class="legend">Local</text>
+  <rect class="llm" x="100" y="284" width="14" height="14" rx="2"/>
+  <text x="120" y="295" class="legend">LLM</text>
+  <rect class="out" x="168" y="284" width="14" height="14" rx="2"/>
+  <text x="188" y="295" class="legend">Outputs</text>
+</svg>
