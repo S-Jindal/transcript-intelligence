@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     llm_concurrency: int = Field(default=8, ge=1)
     llm_maximum_attempts: int = Field(default=4, ge=1)
     llm_initial_backoff_seconds: float = Field(default=1.0, ge=0)
+    llm_timeout_seconds: float = Field(default=90.0, gt=0)
 
     embedding_model: str = "BAAI/bge-base-en-v1.5"
     embedding_device: str = "auto"
@@ -30,7 +31,6 @@ class Settings(BaseSettings):
 
     classify_utterance_window: int = Field(default=10, ge=1)
     classify_confidence_threshold: float = Field(default=0.7, ge=0, le=1)
-    quote_max_edit_distance: int = Field(default=15, ge=0)
 
     topic_prompt_version: str = "topic-label-v1"
     findings_prompt_version: str = "segment-findings-v1"

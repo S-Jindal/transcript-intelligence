@@ -10,14 +10,12 @@ from transcript_intelligence.logging_setup import get_logger
 from transcript_intelligence.models import (
     CentroidSegmentRecord,
     ClusterMetadata,
-    EvidenceSpan,
     Finding,
     Segment,
     SourceSet,
     TopicLabel,
     TopicTerm,
 )
-from transcript_intelligence.quote_match import locate_quote
 
 log = get_logger(__name__)
 
@@ -34,7 +32,6 @@ class FindingItem(BaseModel):
     reason: str
     confidence: float = Field(ge=0, le=1)
     intensity: int | None = Field(default=None, ge=1, le=5)
-    quote: str
 
 
 class FindingsResponse(BaseModel):
@@ -42,19 +39,19 @@ class FindingsResponse(BaseModel):
 
 
 TOPIC_INSTRUCTIONS = """
-We're performing topic modeling on a set of redacted transcripts with interactions between customers and account managers or sales staff.
+We're performing topic modeling on a set of redacted transcripts with interactions between customers and account managers or support staff.
 Name the cluster topic using the ranked terms and example segments from the same cluster.
 Return a concise business label and one-sentence description.
 Do not invent details absent from the evidence.
 """.strip()
 
 FINDINGS_INSTRUCTIONS = """
-Extract sentiment and business findings from the redacted segment of transcript with interactions between customers and account managers or sales staff.
+Extract sentiment and business findings from the redacted segment of transcript with interactions between customers and account managers or support staff.
 Valence values must be positive or negative (treat uncertainty as negative).
 Allowed finding_type values include:
 sentiment, customer_effort, frustration, resolution, objection,
 renewal_risk, feature_request, opportunity, commitment.
-Every finding must include an exact quote copied from the segment text.
+Also base your finding with a reason and the confidence level.
 If nothing meaningful is present, return an empty findings list.
 """.strip()
 
@@ -168,7 +165,7 @@ async def extract_findings(
     settings: Settings,
     segments: list[Segment],
     stage_dir: Path,
-) -> tuple[list[Finding], list[EvidenceSpan]]:
+) -> list[Finding]:
     customer_segments = [
         segment
         for segment in segments
@@ -177,9 +174,7 @@ async def extract_findings(
     ]
     semaphore = asyncio.Semaphore(settings.llm_concurrency)
 
-    async def extract_one(
-        segment: Segment,
-    ) -> tuple[list[Finding], list[EvidenceSpan]]:
+    async def extract_one(segment: Segment) -> list[Finding]:
         request_id = f"findings:{segment.segment_id}"
         async with semaphore:
             parsed = await _parse_with_retries(
@@ -191,64 +186,30 @@ async def extract_findings(
                 request_id,
             )
         assert isinstance(parsed, FindingsResponse)
-        findings: list[Finding] = []
-        evidence: list[EvidenceSpan] = []
-        for index, item in enumerate(parsed.findings):
-            match = locate_quote(
-                segment.text,
-                item.quote,
-                settings.quote_max_edit_distance,
+        return [
+            Finding(
+                finding_id=f"{segment.segment_id}:finding:{index}",
+                request_id=request_id,
+                transcript_id=segment.transcript_id,
+                segment_id=segment.segment_id,
+                source_set=segment.source_set,
+                finding_type=item.finding_type,
+                target=item.target,
+                value=item.value,
+                reason=item.reason,
+                confidence=item.confidence,
+                intensity=item.intensity,
+                model=settings.llm_model,
+                prompt_version=settings.findings_prompt_version,
             )
-            if match is None:
-                log.warning(
-                    "finding quote not found in segment, skipping",
-                    segment_id=segment.segment_id,
-                    finding_type=item.finding_type,
-                )
-                continue
-            matched_quote = segment.text[match.start : match.end]
-            finding_id = f"{segment.segment_id}:finding:{index}"
-            evidence_id = f"{finding_id}:evidence"
-            findings.append(
-                Finding(
-                    finding_id=finding_id,
-                    request_id=request_id,
-                    transcript_id=segment.transcript_id,
-                    segment_id=segment.segment_id,
-                    source_set=segment.source_set,
-                    finding_type=item.finding_type,
-                    target=item.target,
-                    value=item.value,
-                    reason=item.reason,
-                    confidence=item.confidence,
-                    intensity=item.intensity,
-                    evidence_id=evidence_id,
-                    model=settings.llm_model,
-                    prompt_version=settings.findings_prompt_version,
-                )
-            )
-            evidence.append(
-                EvidenceSpan(
-                    evidence_id=evidence_id,
-                    finding_id=finding_id,
-                    segment_id=segment.segment_id,
-                    transcript_id=segment.transcript_id,
-                    quote=matched_quote,
-                    start=match.start,
-                    end=match.end,
-                    turn_ids=segment.turn_ids,
-                )
-            )
-        return findings, evidence
+            for index, item in enumerate(parsed.findings)
+        ]
 
     tasks = [extract_one(segment) for segment in customer_segments]
     all_findings: list[Finding] = []
-    all_evidence: list[EvidenceSpan] = []
     done = 0
     for task in asyncio.as_completed(tasks):
-        findings, evidence = await task
-        all_findings.extend(findings)
-        all_evidence.extend(evidence)
+        all_findings.extend(await task)
         done += 1
         if done % 20 == 0 or done == len(tasks):
             log.info(
@@ -257,10 +218,5 @@ async def extract_findings(
                 total=len(tasks),
             )
     write_jsonl(stage_dir / "findings.jsonl", all_findings)
-    write_jsonl(stage_dir / "evidence.jsonl", all_evidence)
-    log.info(
-        "findings extraction finished",
-        findings=len(all_findings),
-        evidence=len(all_evidence),
-    )
-    return all_findings, all_evidence
+    log.info("findings extraction finished", findings=len(all_findings))
+    return all_findings

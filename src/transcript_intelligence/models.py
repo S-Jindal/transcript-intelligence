@@ -191,17 +191,6 @@ class TopicLabel(StrictModel):
     prompt_version: str
 
 
-class EvidenceSpan(StrictModel):
-    evidence_id: str
-    finding_id: str
-    segment_id: str
-    transcript_id: str
-    quote: str
-    start: int
-    end: int
-    turn_ids: list[str]
-
-
 class Finding(StrictModel):
     finding_id: str
     request_id: str
@@ -214,7 +203,6 @@ class Finding(StrictModel):
     reason: str
     confidence: float = Field(ge=0, le=1)
     intensity: int | None = Field(default=None, ge=1, le=5)
-    evidence_id: str
     model: str
     prompt_version: str
 

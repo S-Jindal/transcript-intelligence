@@ -36,7 +36,7 @@ transcript-intelligence \
   --verbose
 ```
 
-CLI flags are only `--input`, `--output`, and `--verbose`. All other settings come from `.env` (see `.env.example`), including `CLASSIFY_CONFIDENCE_THRESHOLD` and `QUOTE_MAX_EDIT_DISTANCE`.
+CLI flags are only `--input`, `--output`, and `--verbose`. All other settings come from `.env` (see `.env.example`), including `CLASSIFY_CONFIDENCE_THRESHOLD`.
 
 Incomplete `execution_<id>` directories are resumed; completed stages are skipped. A completed execution causes the next run to allocate `execution_{n+1}`.
 
@@ -75,22 +75,11 @@ Outliers stay in lineage but are excluded from prevalence denominators. For each
 
 ### 7. Sentiment / findings (LLM)
 
-Customer-facing segments only. Structured extraction for sentiment, effort, frustration, resolution, objections, renewal risk, feature requests, opportunities, commitments. Each finding must cite a quote aligned to the segment (see below). Provider `sentimentType` on raw utterances is ignored.
+Customer-facing segments only. Structured extraction for sentiment, effort, frustration, resolution, objections, renewal risk, feature requests, opportunities, commitments — each with a `reason` and confidence. Drill into the linked `segment_id` for the underlying text. Provider `sentimentType` on raw utterances is ignored.
 
 ### 8. Aggregation + analytics
 
 Pandas builds segment-based rates (not call- or customer-based) with full contributor lineage. Plotly writes HTML under `analytical_stage/html/`.
-
-## Quote matching for findings
-
-LLM quotes are often slightly wrong. Alignment:
-
-1. Exact substring match
-2. Else sliding-window **Levenshtein** (distance ≤ `QUOTE_MAX_EDIT_DISTANCE`, default 15)
-
-Evidence stores the matched **segment** span. Only invented / highly divergent quotes are skipped.
-
-![Quote matching](docs/quote-matching.svg)
 
 ## Analysis outputs
 
@@ -118,13 +107,7 @@ BERTopic Plotly views (topic map / hierarchy when available) are under `clusteri
 3. Open the segment text via `segment_id` in `segment_stage/segments.jsonl`.
 4. Open call metadata via `transcript_id` in `ingest_stage/transcripts.jsonl`.
 
-For an LLM finding, continue:
-
-```text
-sentiment_stage/findings.jsonl
-  → evidence_id
-  → sentiment_stage/evidence.jsonl   # exact redacted quote + offsets
-```
+For an LLM finding, open `sentiment_stage/findings.jsonl` and follow `segment_id` into `segment_stage/segments.jsonl` (reason + fields explain the call-out; the segment is the evidence text).
 
 Topic labels and membership:
 

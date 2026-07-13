@@ -37,7 +37,7 @@
   <text x="368" y="138" text-anchor="middle" class="sub">call type (LLM)</text>
 
   <rect class="local" x="448" y="90" width="120" height="70" rx="8"/>
-  <text x="508" y="112" text-anchor="middle" class="label">Turns ’</text>
+  <text x="508" y="112" text-anchor="middle" class="label">Turns â†’</text>
   <text x="508" y="128" text-anchor="middle" class="label">Segments</text>
   <text x="508" y="146" text-anchor="middle" class="sub">BGE embeddings</text>
 

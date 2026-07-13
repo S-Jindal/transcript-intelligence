@@ -51,7 +51,10 @@ def main(
             settings.embedding_model,
             settings.resolved_embedding_device(),
         ),
-        llm_client=AsyncOpenAI(api_key=settings.openai_api_key),
+        llm_client=AsyncOpenAI(
+            api_key=settings.openai_api_key,
+            timeout=settings.llm_timeout_seconds,
+        ),
     )
     result = run_pipeline(
         settings,
