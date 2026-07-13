@@ -57,6 +57,7 @@ def _run_stage(execution: Execution, stage: str, work) -> None:
         log.info("skipping completed stage", stage=stage)
         return
     log.info("starting stage", stage=stage)
+    execution.clear_stage_outputs(stage)
     execution.mark(stage, StageStatus.running)
     try:
         work()

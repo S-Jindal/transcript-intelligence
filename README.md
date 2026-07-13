@@ -24,7 +24,6 @@ source .venv/bin/activate
 pip install -U pip
 pip install -e .
 python -m spacy download en_core_web_sm
-cp .env.example .env   # set OPENAI_API_KEY
 ```
 
 ## Run
@@ -36,9 +35,9 @@ transcript-intelligence \
   --verbose
 ```
 
-CLI flags are only `--input`, `--output`, and `--verbose`. All other settings come from `.env` (see `.env.example`), including `CLASSIFY_CONFIDENCE_THRESHOLD`.
+CLI flags are only `--input`, `--output`, and `--verbose`. All other settings come from `.env`. 
 
-Incomplete `execution_<id>` directories are resumed; completed stages are skipped. A completed execution causes the next run to allocate `execution_{n+1}`.
+Incomplete `execution_<id>` directories are resumed; completed stages are skipped. A completed execution causes the next run to allocate `execution_{n+1}`. Before a non-complete stage runs, its stage output directory is cleared so stale artifacts are not mixed with new writes.
 
 ## Pipeline stages
 
@@ -73,13 +72,42 @@ Adjacent turns are grouped into segments using **Sentence Transformers** `BAAI/b
 
 Outliers stay in lineage but are excluded from prevalence denominators. For each non-outlier cluster, top c-TF-IDF terms and centroid-nearest segments are selected automatically; an online LLM returns a short business label + description.
 
+#### Topic-word configuration (c-TF-IDF)
+
+Default BERTopic keeps English stop words and turns `[PERSON_01]` into tokens like `person_01`, which then dominate topic terms. This pipeline configures representation explicitly (clustering still uses BGE embeddings; only the **word list** changes):
+
+| Setting | Value | Why |
+|---|---|---|
+| Placeholder strip | `[TAG_NN]` removed before tokenize | Stops `person02`-style leakage from PII tags |
+| Stop words | sklearn English + conversational fillers (`yeah`, `ok`, `um`, `im`, …) + `person01` / `person_02`-style tokens | Chat noise is not in the default English list |
+| `ngram_range` | `(1, 2)` | Unigrams and bigrams (e.g. `password reset`) |
+| `min_df` | `2` | Drop rare one-off tokens |
+| `reduce_frequent_words` | `True` on `ClassTfidfTransformer` | Uses `sqrt(TF)` so high-frequency fillers rank lower |
+
+c-TF-IDF alone does **not** zero out words that appear in every cluster (its IDF uses total term count across class-docs, and within-topic ranking is still driven by TF). Stop lists + `reduce_frequent_words` are what keep terms business-relevant.
+
+When a stage is re-run (`pending` / not `complete`), its output directory is deleted first (clustering also clears `topic_representation_stage/`) so old term files and charts cannot linger.
+
 ### 7. Sentiment / findings (LLM)
 
-Customer-facing segments only. Structured extraction for sentiment, effort, frustration, resolution, objections, renewal risk, feature requests, opportunities, commitments — each with a `reason` and confidence. Drill into the linked `segment_id` for the underlying text. Provider `sentimentType` on raw utterances is ignored.
+Customer-facing segments only (support + account-manager). One structured LLM call per segment returns zero or more rows. Each row has `finding_type`, `target`, `value`, `reason`, and confidence. Provider `sentimentType` on raw utterances is ignored.
+
+Charts split those rows:
+
+| Chart | Rows used | Category string |
+|---|---|---|
+| Sentiment | `finding_type == "sentiment"` | `{value}:{target}` (e.g. `negative:billing experience`) |
+| Findings | all other types | `{finding_type}:{value}` (e.g. `renewal_risk:…`) |
+
+`chart_point_id` is `sentiment|…` or `finding|…` plus source, month, and that category. Because text is redacted, the model sometimes puts `[PERSON_xx]` into `target`/`value`, which can pollute labels — see [BONUS.md](BONUS.md) for a speaker-role fix.
 
 ### 8. Aggregation + analytics
 
-Pandas builds segment-based rates (not call- or customer-based) with full contributor lineage. Plotly writes HTML under `analytical_stage/html/`.
+Pandas builds **segment-based** rates (not call- or customer-based). `metrics.jsonl` stores numerator, denominator, rate, and `distinct_transcripts`. `metric_contributors.jsonl` stores **numerator-only** lineage (denominator membership lists are omitted as redundant).
+
+Monthly buckets are calendar months of `meeting-info` `startTime` (`YYYY-MM`) — e.g. `2026-03` means calls **in** March 2026, not “everything before March.” Plotly may display that as a date like “March 1, 2026”; treat it as the month label.
+
+Plotly HTML lands under `analytical_stage/html/`.
 
 ## Analysis outputs
 
@@ -91,23 +119,32 @@ Under `analytical_stage/html/`:
 
 | File | Meaning |
 |---|---|
-| `topic_prevalence_monthly.html` | % of non-outlier segments per topic, by call type and month |
-| `topic_prevalence_all_time.html` | Same, aggregated across months |
-| `sentiment_distribution.html` | Monthly % of customer-call segments with each sentiment value |
-| `finding_prevalence.html` | Monthly % for each finding type/value on customer calls |
+| `topic_prevalence_monthly.html` | Top **5** topics by segment count per call type and month |
+| `topic_prevalence_all_time.html` | Top **5** topics by segment count per call type |
+| `sentiment_distribution.html` | Top **7** sentiment categories per call type and month |
+| `finding_prevalence.html` | Top **7** finding categories per call type and month |
 
-Hover a bar for numerator, denominator, rate, and `chart_point_id`. Metrics are **segment-based**. Small denominators are directional, not statistically strong.
+Shared chart behavior:
 
-BERTopic Plotly views (topic map / hierarchy when available) are under `clustering_stage/visualizations/`.
+- Stacked bars; **largest segment share at the bottom**
+- Number **inside** each box = **distinct transcripts** (calls), so one long call cannot look like many customers
+- Hover shows segment numerator/denominator, rate, transcript count, and `chart_point_id`
+- Sticky **copy bar**: hover fills a selectable `chart_point_id`; **Copy** or click the bar to copy
+- Full-viewport layout; legend under the plot
+- Sentiment/findings colors: **greens** for positive-leaning signals, **reds** for negative-leaning (findings mapped by type, e.g. `opportunity` vs `frustration`)
+
+Small denominators are directional, not statistically strong.
+
+BERTopic Plotly views (when available) are under `clustering_stage/visualizations/`.
 
 ### How to read a chart point
 
-1. Copy `chart_point_id` from the chart hover (also listed in `analytical_stage/chart_manifest.json`).
-2. Find matching rows in `aggregation_stage/metric_contributors.jsonl` (`numerator` / `denominator_only` / `excluded`).
-3. Open the segment text via `segment_id` in `segment_stage/segments.jsonl`.
+1. Copy `chart_point_id` from the sticky bar (or chart hover / `analytical_stage/chart_manifest.json`).
+2. Find matching **numerator** rows in `aggregation_stage/metric_contributors.jsonl` (denominator size is on the metric row).
+3. Open the segment via `segment_id` in `segment_stage/segments.jsonl`.
 4. Open call metadata via `transcript_id` in `ingest_stage/transcripts.jsonl`.
 
-For an LLM finding, open `sentiment_stage/findings.jsonl` and follow `segment_id` into `segment_stage/segments.jsonl` (reason + fields explain the call-out; the segment is the evidence text).
+For an LLM finding, open `sentiment_stage/findings.jsonl` and follow `segment_id` (reason + fields explain the call-out; the segment is the evidence text).
 
 Topic labels and membership:
 
@@ -118,6 +155,10 @@ topic_label_stage/topics.jsonl
 
 Low-confidence call-type labels: `classify_stage/review_queue.jsonl`.
 
+## Bonus ideas
+
+See [BONUS.md](BONUS.md) (e.g. infer speaker **roles** during classify so charts say `positive:customer` instead of `positive:[PERSON_02]`).
+
 ## Deferred
 
 - Scalability / distributed workers
@@ -125,3 +166,4 @@ Low-confidence call-type labels: `classify_stage/review_queue.jsonl`.
 - Encrypted PII mapping files
 - Soft-eval against provider `sentimentType`
 - Production human-review workflow
+- Speaker-role rewriting in the live pipeline (documented in BONUS.md first)

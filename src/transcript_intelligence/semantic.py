@@ -27,9 +27,80 @@ def load_embedding_model(model_name: str, device: str) -> SentenceTransformer:
 
 
 def build_topic_model(minimum_cluster_size: int, random_state: int):
+    import re
+
     from bertopic import BERTopic
+    from bertopic.vectorizers import ClassTfidfTransformer
     from hdbscan import HDBSCAN
+    from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, CountVectorizer
     from umap import UMAP
+
+    # Strip [PERSON_01]-style tags (case-insensitive) before tokenization.
+    placeholder = re.compile(r"\[[A-Za-z][A-Za-z0-9_]*_\d+\]")
+
+    def preprocess(text: str) -> str:
+        return placeholder.sub(" ", text).lower()
+
+    conversational_stops = {
+        "yeah",
+        "yes",
+        "yep",
+        "ok",
+        "okay",
+        "um",
+        "uh",
+        "huh",
+        "hmm",
+        "ah",
+        "oh",
+        "hey",
+        "hi",
+        "hello",
+        "like",
+        "im",
+        "ill",
+        "ive",
+        "id",
+        "thats",
+        "dont",
+        "cant",
+        "wont",
+        "didnt",
+        "doesnt",
+        "isnt",
+        "wasnt",
+        "gonna",
+        "gotta",
+        "wanna",
+        "really",
+        "just",
+        "kind",
+        "sort",
+        "thing",
+        "things",
+        "going",
+        "get",
+        "got",
+        "right",
+        "well",
+        "also",
+        "still",
+        "much",
+        "even",
+    }
+    person_stops = {
+        token
+        for index in range(100)
+        for token in (
+            f"person{index}",
+            f"person{index:02d}",
+            f"person_{index}",
+            f"person_{index:02d}",
+        )
+    }
+    stop_words = list(
+        ENGLISH_STOP_WORDS | conversational_stops | person_stops
+    )
 
     return BERTopic(
         umap_model=UMAP(
@@ -45,6 +116,14 @@ def build_topic_model(minimum_cluster_size: int, random_state: int):
             cluster_selection_method="eom",
             prediction_data=True,
         ),
+        vectorizer_model=CountVectorizer(
+            stop_words=stop_words,
+            ngram_range=(1, 2),
+            min_df=2,
+            preprocessor=preprocess,
+        ),
+        # Softens high within-cluster TF so fillers rank lower in c-TF-IDF.
+        ctfidf_model=ClassTfidfTransformer(reduce_frequent_words=True),
         embedding_model=None,
         calculate_probabilities=False,
         verbose=False,

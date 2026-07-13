@@ -64,21 +64,20 @@ def aggregate_metrics(
                     numerator=len(members),
                     denominator=denominator,
                     value=_rate(len(members), denominator),
+                    distinct_transcripts=len(
+                        {row.transcript_id for row in members}
+                    ),
                 )
             )
             contributors.extend(
                 MetricContributor(
                     chart_point_id=chart_point_id,
-                    membership_role=(
-                        "numerator"
-                        if row.topic_id == topic_id
-                        else "denominator_only"
-                    ),
+                    membership_role="numerator",
                     topic_id=row.topic_id,
                     segment_id=row.segment_id,
                     transcript_id=row.transcript_id,
                 )
-                for row in rows
+                for row in members
             )
 
     for source, rows in sorted(by_source.items()):
@@ -97,21 +96,20 @@ def aggregate_metrics(
                     numerator=len(members),
                     denominator=denominator,
                     value=_rate(len(members), denominator),
+                    distinct_transcripts=len(
+                        {row.transcript_id for row in members}
+                    ),
                 )
             )
             contributors.extend(
                 MetricContributor(
                     chart_point_id=chart_point_id,
-                    membership_role=(
-                        "numerator"
-                        if row.topic_id == topic_id
-                        else "denominator_only"
-                    ),
+                    membership_role="numerator",
                     topic_id=row.topic_id,
                     segment_id=row.segment_id,
                     transcript_id=row.transcript_id,
                 )
-                for row in rows
+                for row in members
             )
 
     customer_segments = [
@@ -173,29 +171,20 @@ def aggregate_metrics(
                         numerator=len(members),
                         denominator=denominator,
                         value=_rate(len(members), denominator),
+                        distinct_transcripts=len(
+                            {item.transcript_id for item in members}
+                        ),
                     )
                 )
-                member_segments = {item.segment_id for item in members}
                 contributors.extend(
                     MetricContributor(
                         chart_point_id=chart_point_id,
-                        membership_role=(
-                            "numerator"
-                            if segment.segment_id in member_segments
-                            else "denominator_only"
-                        ),
-                        finding_id=next(
-                            (
-                                item.finding_id
-                                for item in members
-                                if item.segment_id == segment.segment_id
-                            ),
-                            None,
-                        ),
-                        segment_id=segment.segment_id,
-                        transcript_id=segment.transcript_id,
+                        membership_role="numerator",
+                        finding_id=item.finding_id,
+                        segment_id=item.segment_id,
+                        transcript_id=item.transcript_id,
                     )
-                    for segment in month_segments
+                    for item in members
                 )
 
             finding_categories = sorted(
@@ -225,29 +214,20 @@ def aggregate_metrics(
                         numerator=len(members),
                         denominator=denominator,
                         value=_rate(len(members), denominator),
+                        distinct_transcripts=len(
+                            {item.transcript_id for item in members}
+                        ),
                     )
                 )
-                member_segments = {item.segment_id for item in members}
                 contributors.extend(
                     MetricContributor(
                         chart_point_id=chart_point_id,
-                        membership_role=(
-                            "numerator"
-                            if segment.segment_id in member_segments
-                            else "denominator_only"
-                        ),
-                        finding_id=next(
-                            (
-                                item.finding_id
-                                for item in members
-                                if item.segment_id == segment.segment_id
-                            ),
-                            None,
-                        ),
-                        segment_id=segment.segment_id,
-                        transcript_id=segment.transcript_id,
+                        membership_role="numerator",
+                        finding_id=item.finding_id,
+                        segment_id=item.segment_id,
+                        transcript_id=item.transcript_id,
                     )
-                    for segment in month_segments
+                    for item in members
                 )
 
     return metrics, contributors

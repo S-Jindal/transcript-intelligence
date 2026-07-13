@@ -217,6 +217,7 @@ class Metric(StrictModel):
     numerator: int
     denominator: int
     value: float
+    distinct_transcripts: int = 0
     filters: dict[str, Any] = Field(default_factory=dict)
 
 

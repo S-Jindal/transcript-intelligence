@@ -1,5 +1,6 @@
 from enum import StrEnum
 from pathlib import Path
+import shutil
 
 from transcript_intelligence.io_utils import read_json, write_json
 from transcript_intelligence.logging_setup import get_logger
@@ -27,6 +28,21 @@ STAGES = (
     "aggregation",
     "analytics",
 )
+
+# Pipeline stage name -> output directory stems under execution_<id>/
+STAGE_OUTPUT_DIRS = {
+    "ingest": ("ingest",),
+    "privacy": ("privacy",),
+    "classify": ("classify",),
+    "turns": ("turns",),
+    "segments": ("segments",),
+    "embeddings": ("embeddings",),
+    "clustering": ("clustering", "topic_representation"),
+    "topic_labels": ("topic_label",),
+    "sentiment": ("sentiment",),
+    "aggregation": ("aggregation",),
+    "analytics": ("analytical",),
+}
 
 
 class Execution:
@@ -75,6 +91,17 @@ class Execution:
         path = self.directory / f"{name}_stage"
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def clear_stage_outputs(self, stage: str) -> None:
+        for name in STAGE_OUTPUT_DIRS[stage]:
+            path = self.directory / f"{name}_stage"
+            if path.exists():
+                shutil.rmtree(path)
+                log.info(
+                    "cleared stage output directory",
+                    stage=stage,
+                    path=str(path),
+                )
 
     def is_complete(self, stage: str) -> bool:
         return self.state["stages"].get(stage) == StageStatus.complete.value
