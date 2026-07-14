@@ -44,23 +44,6 @@ _NEUTRAL_SHADES = (
     "#64748B",
     "#475569",
 )
-_NEGATIVE_FINDING_TYPES = {
-    "process_friction",
-    "customer_effort",
-    "objection",
-    "renewal_risk",
-    "competitive_risk",
-    "operational_risk",
-    "delivery_risk",
-    "capacity_constraint",
-    "frustration",
-}
-_POSITIVE_FINDING_TYPES = {
-    "opportunity",
-    "feature_request",
-    "commitment",
-    "resolution",
-}
 _SOURCE_SET_COLORS = {
     "customer-support": ("#1D4ED8", "blue"),
     "account-manager": ("#047857", "green"),
@@ -81,6 +64,7 @@ def _frame(metrics: list[Metric], metric_type: str) -> pd.DataFrame:
                 "denominator": metric.denominator,
                 "distinct_transcripts": metric.distinct_transcripts,
                 "chart_point_id": metric.chart_point_id,
+                "polarity": metric.polarity,
             }
             for metric in metrics
             if metric.metric_type == metric_type
@@ -88,26 +72,10 @@ def _frame(metrics: list[Metric], metric_type: str) -> pd.DataFrame:
     )
 
 
-def _signal_polarity(category: str, mode: str) -> str:
-    lowered = category.strip().lower()
-    if mode == "sentiment":
-        if lowered.startswith("positive"):
-            return "positive"
-        if lowered.startswith("negative"):
-            return "negative"
-        return "neutral"
-
-    finding_type = lowered.split(":", 1)[0].strip()
-    if finding_type in _POSITIVE_FINDING_TYPES:
-        return "positive"
-    if finding_type in _NEGATIVE_FINDING_TYPES:
-        return "negative"
-    return "neutral"
-
-
 def _shade_for(
     category: str,
     mode: str,
+    polarity: str | None,
     palette: dict[str, str],
     counters: dict[str, int],
 ) -> str:
@@ -116,14 +84,14 @@ def _shade_for(
     if mode == "topic":
         color = _TOPIC_COLORS[len(palette) % len(_TOPIC_COLORS)]
     else:
-        polarity = _signal_polarity(category, mode)
+        resolved = polarity if polarity in {"positive", "negative"} else "neutral"
         shades = {
             "positive": _POSITIVE_SHADES,
             "negative": _NEGATIVE_SHADES,
             "neutral": _NEUTRAL_SHADES,
-        }[polarity]
-        index = counters[polarity] % len(shades)
-        counters[polarity] += 1
+        }[resolved]
+        index = counters[resolved] % len(shades)
+        counters[resolved] += 1
         color = shades[index]
     palette[category] = color
     return color
@@ -149,6 +117,7 @@ def _add_stack_segment(
     color = _shade_for(
         row.category,
         color_mode,
+        getattr(row, "polarity", None),
         color_palette,
         shade_counters,
     )
@@ -446,6 +415,13 @@ def _write_stacked_monthly(
         figure.update_yaxes(
             title_text="segment share",
             tickformat=".0%",
+            row=row_index,
+            col=1,
+        )
+        # NOTE: YYYY-MM strings are otherwise parsed as dates (e.g. Apr → Mar 29).
+        figure.update_xaxes(
+            type="category",
+            categoryorder="category ascending",
             row=row_index,
             col=1,
         )

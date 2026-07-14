@@ -21,6 +21,16 @@ def _rate(numerator: int, denominator: int) -> float:
     return numerator / denominator if denominator else 0.0
 
 
+def _bucket_polarity(members: list[Finding]) -> str:
+    positives = sum(1 for finding in members if finding.value == "positive")
+    negatives = len(members) - positives
+    if positives > negatives:
+        return "positive"
+    if negatives > positives:
+        return "negative"
+    return "neutral"
+
+
 def aggregate_metrics(
     transcripts: list[TranscriptRecord],
     segments: list[Segment],
@@ -179,6 +189,7 @@ def aggregate_metrics(
                         distinct_transcripts=len(
                             {item.transcript_id for item in members}
                         ),
+                        polarity=_bucket_polarity(members),
                     )
                 )
                 contributors.extend(
@@ -194,7 +205,7 @@ def aggregate_metrics(
 
             finding_categories = sorted(
                 {
-                    f"{finding.finding_type}:{finding.value}"
+                    finding.finding_type
                     for segment in month_segments
                     for finding in findings_by_segment[segment.segment_id]
                     if finding.finding_type != "sentiment"
@@ -205,7 +216,7 @@ def aggregate_metrics(
                     finding
                     for segment in month_segments
                     for finding in findings_by_segment[segment.segment_id]
-                    if f"{finding.finding_type}:{finding.value}" == category
+                    if finding.finding_type == category
                 ]
                 chart_point_id = f"finding|{source}|{month}|{category}"
                 metrics.append(
@@ -222,6 +233,7 @@ def aggregate_metrics(
                         distinct_transcripts=len(
                             {item.transcript_id for item in members}
                         ),
+                        polarity=_bucket_polarity(members),
                     )
                 )
                 contributors.extend(

@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     embedding_device: str = "auto"
     spacy_model: str = "en_core_web_sm"
 
+    findings_per_segment_maximum: int = Field(default=3, ge=1)
+    finding_proposal_promotion_minimum: int = Field(default=3, ge=1)
+
     maximum_segment_tokens: int = Field(default=500, ge=1, le=500)
     semantic_similarity_threshold: float = Field(default=0.35, ge=-1, le=1)
     topic_merge_similarity_threshold: float = Field(default=0.6, ge=-1, le=1)
@@ -34,7 +37,7 @@ class Settings(BaseSettings):
     classify_confidence_threshold: float = Field(default=0.7, ge=0, le=1)
 
     topic_prompt_version: str = "topic-label-v1"
-    findings_prompt_version: str = "segment-findings-v3"
+    findings_prompt_version: str = "segment-findings-v4"
 
     allowlist: str = "Aegis Cloud Security,Aegis Identity"
     account_patterns: str = (

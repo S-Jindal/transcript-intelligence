@@ -199,13 +199,10 @@ class Finding(StrictModel):
     source_set: SourceSet
     finding_type: str
     target: str
-    value: str
+    value: Literal["positive", "negative"]
     reason: str
-    intensity: int | None = Field(default=None, ge=1, le=5)
     model: str
     prompt_version: str
-    # Accepted when reloading older findings.jsonl; not requested from the LLM.
-    confidence: float | None = Field(default=None, ge=0, le=1)
 
 
 class Metric(StrictModel):
@@ -219,6 +216,7 @@ class Metric(StrictModel):
     denominator: int
     value: float
     distinct_transcripts: int = 0
+    polarity: Literal["positive", "negative", "neutral"] | None = None
     filters: dict[str, Any] = Field(default_factory=dict)
 
 

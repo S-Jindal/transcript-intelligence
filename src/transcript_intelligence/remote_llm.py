@@ -1,11 +1,14 @@
 import asyncio
+from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from transcript_intelligence.config import Settings
-from transcript_intelligence.io_utils import write_jsonl
+from transcript_intelligence.io_utils import write_json, write_jsonl
 from transcript_intelligence.logging_setup import get_logger
 from transcript_intelligence.models import (
     CentroidSegmentRecord,
@@ -20,6 +23,27 @@ from transcript_intelligence.models import (
 log = get_logger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class TokenUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    def __add__(self, other: "TokenUsage") -> "TokenUsage":
+        return TokenUsage(
+            self.input_tokens + other.input_tokens,
+            self.output_tokens + other.output_tokens,
+        )
+
+
+def _token_usage(response) -> TokenUsage:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return TokenUsage()
+    return TokenUsage(
+        input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+    )
+
 class TopicLabelResponse(BaseModel):
     label: str
     description: str
@@ -28,9 +52,8 @@ class TopicLabelResponse(BaseModel):
 class FindingItem(BaseModel):
     finding_type: str
     target: str
-    value: str
+    value: Literal["positive", "negative"]
     reason: str
-    intensity: int | None = Field(default=None, ge=1, le=5)
 
 
 class FindingsResponse(BaseModel):
@@ -44,28 +67,53 @@ Return a concise business label and one-sentence description.
 Do not invent details absent from the evidence.
 """.strip()
 
+CUSTOMER_CANONICAL_FINDING_TYPES = (
+    "sentiment",
+    "process_friction",
+    "resolution",
+    "objection",
+    "renewal_risk",
+    "feature_request",
+    "opportunity",
+    "commitment",
+    "competitive_risk",
+)
+INTERNAL_CANONICAL_FINDING_TYPES = (
+    "sentiment",
+    "operational_risk",
+    "delivery_risk",
+    "competitive_risk",
+    "renewal_risk",
+    "opportunity",
+    "commitment",
+    "capacity_constraint",
+)
+
 CUSTOMER_FINDINGS_INSTRUCTIONS = """
 Extract sentiment and business findings from the redacted segment of a
 customer-facing call (customer support or account manager).
 If nothing meaningful is present, return an empty findings list.
+Return at most 3 findings — only the most salient signals in the segment.
 
-Return zero or more objects. Each object must use these fields:
+Each object must use these fields:
 
 finding_type:
-  One of: sentiment, process_friction, resolution, objection,
-  renewal_risk, feature_request, opportunity, commitment,
-  competitive_risk.
+  Prefer one of these canonical types when it fits:
+  sentiment, process_friction, resolution, objection, renewal_risk,
+  feature_request, opportunity, commitment, competitive_risk.
   Use sentiment for any affective signal toward a concrete target,
   including praise, satisfaction, frustration, anger, or
-  dissatisfaction. 
+  dissatisfaction.
   Use process_friction when the customer had to do excessive work to
   make progress (repeated retries, manual workarounds, long waits,
-  re-explaining the issue, or ticket ping-pong). This is about burden
-  of process, not mood alone — pair with sentiment when both apply.
+  re-explaining the issue, or ticket ping-pong).
   Use competitive_risk when a competitor product, vendor, or
   alternative is named or clearly implied as leverage, evaluation,
   or displacement pressure.
-  Use the remaining types only for the matching business signal.
+  Only if a genuinely distinct, recurring business signal fits none of
+  the canonical types, you may introduce a new concise snake_case
+  finding_type. Do not create near-duplicates or synonyms of the
+  canonical types.
 
 target:
   The concrete subject of the finding (product, feature, process,
@@ -74,47 +122,41 @@ target:
   like [PERSON_01]. Keep it short and reusable across calls.
 
 value:
-  For finding_type=sentiment: exactly "positive" or "negative"
-  (treat uncertainty, hesitation, mixed tone, or frustration as
-  negative).
-  For competitive_risk: a concise phrase naming the competitor and
-  the pressure.
-  For all other finding_type values: a concise phrase stating the
-  finding itself, not a full-sentence paraphrase of the segment.
+  Exactly "positive" or "negative" — the business polarity of the
+  finding. Use positive for favorable signals (praise, resolution,
+  expansion, wins) and negative for unfavorable ones (dissatisfaction,
+  risk, friction, competitive pressure). Treat uncertainty, hesitation,
+  or mixed tone as negative.
 
 reason:
   One or two sentences explaining why this finding is warranted,
   grounded only in evidence present in the segment. Do not invent
   details that are not in the text.
-
-intensity:
-  Optional integer from 1 (mild) to 5 (severe). Prefer including it
-  for negative sentiment, renewal_risk, process_friction, and
-  competitive_risk. Omit it when intensity is not meaningful.
 """.strip()
 
 INTERNAL_FINDINGS_INSTRUCTIONS = """
 Extract sentiment and business findings from the redacted segment of an
 internal discussion (engineering, product, support ops, or leadership).
 If nothing meaningful is present, return an empty findings list.
+Return at most 3 findings — only the most salient signals in the segment.
 
-Return zero or more objects. Each object must use these fields:
+Each object must use these fields:
 
 finding_type:
-  One of: sentiment, operational_risk, delivery_risk, competitive_risk,
+  Prefer one of these canonical types when it fits:
+  sentiment, operational_risk, delivery_risk, competitive_risk,
   renewal_risk, opportunity, commitment, capacity_constraint.
   Use sentiment for team tone toward a product, incident, roadmap item,
   or process (including frustration or confidence).
   Use operational_risk for reliability, outages, monitoring gaps, or
   customer-impacting incidents discussed internally.
   Use delivery_risk for slip risk on launches, fixes, or milestones.
-  Use competitive_risk when a competitor is named as win/loss pressure
-  or product gap motivation.
-  Use renewal_risk when an at-risk account or renewal is discussed.
-  Use opportunity for expansion, packaging, or product bets.
-  Use commitment for explicit internal ownership or follow-ups.
   Use capacity_constraint when staffing, bandwidth, or prioritization
   is blocking work.
+  Only if a genuinely distinct, recurring business signal fits none of
+  the canonical types, you may introduce a new concise snake_case
+  finding_type. Do not create near-duplicates or synonyms of the
+  canonical types.
 
 target:
   The concrete subject (product, service, incident, account theme,
@@ -122,23 +164,16 @@ target:
   redacted person tokens like [PERSON_01]. Keep it short.
 
 value:
-  For finding_type=sentiment: exactly "positive" or "negative"
-  (treat uncertainty or mixed tone as negative).
-  For competitive_risk: a concise phrase naming the competitor and
-  the pressure.
-  For all other finding_type values: a concise phrase stating the
-  finding itself, not a full-sentence paraphrase of the segment.
+  Exactly "positive" or "negative" — the business polarity of the
+  finding. Use positive for favorable signals (confidence, wins,
+  expansion bets) and negative for unfavorable ones (risk, slippage,
+  outages, competitive pressure). Treat uncertainty or mixed tone as
+  negative.
 
 reason:
   One or two sentences explaining why this finding is warranted,
   grounded only in evidence present in the segment. Do not invent
   details that are not in the text.
-
-intensity:
-  Optional integer from 1 (mild) to 5 (severe). Prefer including it
-  for negative sentiment, operational_risk, delivery_risk,
-  renewal_risk, and competitive_risk. Omit it when intensity is not
-  meaningful.
 """.strip()
 
 
@@ -146,6 +181,12 @@ def _findings_instructions(source_set: SourceSet) -> str:
     if source_set == SourceSet.internal_discuss:
         return INTERNAL_FINDINGS_INSTRUCTIONS
     return CUSTOMER_FINDINGS_INSTRUCTIONS
+
+
+def _canonical_finding_types(source_set: SourceSet) -> frozenset[str]:
+    if source_set == SourceSet.internal_discuss:
+        return frozenset(INTERNAL_CANONICAL_FINDING_TYPES)
+    return frozenset(CUSTOMER_CANONICAL_FINDING_TYPES)
 
 
 
@@ -156,7 +197,8 @@ async def _parse_with_retries(
     input_text: str,
     text_format: type[BaseModel],
     request_id: str,
-) -> BaseModel:
+) -> tuple[BaseModel, TokenUsage]:
+    usage_total = TokenUsage()
     for attempt in range(settings.llm_maximum_attempts):
         try:
             response = await client.responses.parse(
@@ -165,10 +207,11 @@ async def _parse_with_retries(
                 input=input_text,
                 text_format=text_format,
             )
+            usage_total = usage_total + _token_usage(response)
             parsed = response.output_parsed
             if parsed is None:
                 raise ValueError("empty parsed response")
-            return parsed
+            return parsed, usage_total
         except Exception as error:
             if attempt + 1 >= settings.llm_maximum_attempts:
                 raise
@@ -196,7 +239,9 @@ async def label_topics(
     semaphore = asyncio.Semaphore(settings.llm_concurrency)
     topics = [item for item in metadata if not item.is_outlier]
 
-    async def label_one(cluster: ClusterMetadata) -> TopicLabel:
+    async def label_one(
+        cluster: ClusterMetadata,
+    ) -> tuple[TopicLabel, TokenUsage]:
         topic_terms = [
             term.term
             for term in terms
@@ -218,7 +263,7 @@ async def label_topics(
             f"example segments:\n{examples}"
         )
         async with semaphore:
-            parsed = await _parse_with_retries(
+            parsed, usage = await _parse_with_retries(
                 client,
                 settings,
                 TOPIC_INSTRUCTIONS,
@@ -227,29 +272,40 @@ async def label_topics(
                 cluster.topic_id,
             )
         assert isinstance(parsed, TopicLabelResponse)
-        return TopicLabel(
-            topic_version=cluster.topic_version,
-            topic_id=cluster.topic_id,
-            cluster_id=cluster.cluster_id,
-            label=parsed.label,
-            description=parsed.description,
-            terms=topic_terms,
-            centroid_segment_ids=example_ids,
-            cluster_size=cluster.cluster_size,
-            source_distribution=cluster.source_distribution,
-            model=settings.llm_model,
-            prompt_version=settings.topic_prompt_version,
+        return (
+            TopicLabel(
+                topic_version=cluster.topic_version,
+                topic_id=cluster.topic_id,
+                cluster_id=cluster.cluster_id,
+                label=parsed.label,
+                description=parsed.description,
+                terms=topic_terms,
+                centroid_segment_ids=example_ids,
+                cluster_size=cluster.cluster_size,
+                source_distribution=cluster.source_distribution,
+                model=settings.llm_model,
+                prompt_version=settings.topic_prompt_version,
+            ),
+            usage,
         )
 
     tasks = [label_one(cluster) for cluster in topics]
     labels: list[TopicLabel] = []
+    usage_total = TokenUsage()
     done = 0
     for task in asyncio.as_completed(tasks):
-        labels.append(await task)
+        label, usage = await task
+        labels.append(label)
+        usage_total = usage_total + usage
         done += 1
         log.info("topic labeling progress", done=done, total=len(tasks))
     write_jsonl(stage_dir / "topics.jsonl", labels)
-    log.info("topic labeling finished", topics=len(labels))
+    log.info(
+        "topic labeling finished",
+        topics=len(labels),
+        input_tokens=usage_total.input_tokens,
+        output_tokens=usage_total.output_tokens,
+    )
     return labels
 
 
@@ -261,10 +317,12 @@ async def extract_findings(
 ) -> list[Finding]:
     semaphore = asyncio.Semaphore(settings.llm_concurrency)
 
-    async def extract_one(segment: Segment) -> list[Finding]:
+    async def extract_one(
+        segment: Segment,
+    ) -> tuple[list[Finding], TokenUsage]:
         request_id = f"findings:{segment.segment_id}"
         async with semaphore:
-            parsed = await _parse_with_retries(
+            parsed, usage = await _parse_with_retries(
                 client,
                 settings,
                 _findings_instructions(segment.source_set),
@@ -273,36 +331,99 @@ async def extract_findings(
                 request_id,
             )
         assert isinstance(parsed, FindingsResponse)
-        return [
-            Finding(
-                finding_id=f"{segment.segment_id}:finding:{index}",
-                request_id=request_id,
-                transcript_id=segment.transcript_id,
-                segment_id=segment.segment_id,
-                source_set=segment.source_set,
-                finding_type=item.finding_type,
-                target=item.target,
-                value=item.value,
-                reason=item.reason,
-                intensity=item.intensity,
-                model=settings.llm_model,
-                prompt_version=settings.findings_prompt_version,
-            )
-            for index, item in enumerate(parsed.findings)
-        ]
+        salient = parsed.findings[: settings.findings_per_segment_maximum]
+        return (
+            [
+                Finding(
+                    finding_id=f"{segment.segment_id}:finding:{index}",
+                    request_id=request_id,
+                    transcript_id=segment.transcript_id,
+                    segment_id=segment.segment_id,
+                    source_set=segment.source_set,
+                    finding_type=item.finding_type,
+                    target=item.target,
+                    value=item.value,
+                    reason=item.reason,
+                    model=settings.llm_model,
+                    prompt_version=settings.findings_prompt_version,
+                )
+                for index, item in enumerate(salient)
+            ],
+            usage,
+        )
+
+    def _is_proposal(finding: Finding) -> bool:
+        return finding.finding_type not in _canonical_finding_types(
+            finding.source_set
+        )
 
     tasks = [extract_one(segment) for segment in segments]
     all_findings: list[Finding] = []
+    usage_total = TokenUsage()
+    proposal_progress: dict[str, int] = defaultdict(int)
     done = 0
+
     for task in asyncio.as_completed(tasks):
-        all_findings.extend(await task)
+        findings, usage = await task
+        all_findings.extend(findings)
+        usage_total = usage_total + usage
+        for finding in findings:
+            if _is_proposal(finding):
+                proposal_progress[finding.finding_type] += 1
         done += 1
         if done % 20 == 0 or done == len(tasks):
             log.info(
                 "findings progress",
                 done=done,
                 total=len(tasks),
+                proposed_types=len(proposal_progress),
+                proposals=dict(proposal_progress),
             )
-    write_jsonl(stage_dir / "findings.jsonl", all_findings)
-    log.info("findings extraction finished", findings=len(all_findings))
-    return all_findings
+
+    proposals: dict[str, list[Finding]] = defaultdict(list)
+    for finding in all_findings:
+        if _is_proposal(finding):
+            proposals[finding.finding_type].append(finding)
+
+    def _segment_count(items: list[Finding]) -> int:
+        return len({item.segment_id for item in items})
+
+    promoted = {
+        proposed_type
+        for proposed_type, items in proposals.items()
+        if _segment_count(items) >= settings.finding_proposal_promotion_minimum
+    }
+    kept_findings = [
+        finding
+        for finding in all_findings
+        if finding.finding_type not in proposals
+        or finding.finding_type in promoted
+    ]
+
+    proposal_report = [
+        {
+            "proposed_type": proposed_type,
+            "finding_count": len(items),
+            "segment_count": _segment_count(items),
+            "promoted": proposed_type in promoted,
+            "segment_ids": sorted({item.segment_id for item in items}),
+            "finding_ids": [item.finding_id for item in items],
+        }
+        for proposed_type, items in sorted(
+            proposals.items(),
+            key=lambda entry: _segment_count(entry[1]),
+            reverse=True,
+        )
+    ]
+    write_json(stage_dir / "finding_type_proposals.json", proposal_report)
+    write_jsonl(stage_dir / "findings.jsonl", kept_findings)
+    log.info(
+        "findings extraction finished",
+        findings=len(kept_findings),
+        dropped_proposals=len(all_findings) - len(kept_findings),
+        proposed_types=len(proposals),
+        promoted_types=sorted(promoted),
+        input_tokens=usage_total.input_tokens,
+        output_tokens=usage_total.output_tokens,
+    )
+    return kept_findings

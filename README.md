@@ -90,24 +90,26 @@ When a stage is re-run (`pending` / not `complete`), its output directory is del
 
 ### 7. Sentiment / findings (LLM)
 
-All call types. Each segment gets one structured LLM call using a prompt chosen by source set: customer-facing (support + account-manager) vs internal-discuss. Each row has `finding_type`, `target`, `value`, `reason`, and optional `intensity`.
+All call types. Each segment gets one structured LLM call using a prompt chosen by source set: customer-facing (support + account-manager) vs internal-discuss, capped at **3 findings per segment**. Each row has `finding_type`, `target`, `value`, and `reason`. `value` is the business **polarity** — exactly `positive` or `negative` — so every finding carries its own sentiment instead of relying on a hardcoded type→color map.
 
-Customer types emphasize buyer signals (`process_friction`, `renewal_risk`, `feature_request`, …). Internal types emphasize operating signals (`operational_risk`, `delivery_risk`, `capacity_constraint`, …). Affective signals (including frustration) use `finding_type=sentiment` with `value` of `positive` or `negative`. Competitor pressure uses `competitive_risk` in both prompts. Provider `sentimentType` on raw utterances is ignored.
+Each prompt lists **canonical** `finding_type` values — customer buyer signals (`process_friction`, `renewal_risk`, `feature_request`, …) and internal operating signals (`operational_risk`, `delivery_risk`, `capacity_constraint`, …); affective signals use `sentiment`; competitor pressure uses `competitive_risk` in both. The enum is **semi-open**: the model may coin a new snake_case type when a genuinely distinct, recurring signal fits none of the canonical ones. Provider `sentimentType` on raw utterances is ignored.
 
-Charts split those rows:
+New proposals are tallied across the run (with the segments that used them) into `finding_type_proposals.json`. A proposal is **promoted** once it appears in at least `FINDING_PROPOSAL_PROMOTION_MINIMUM` distinct segments (default `3`); promoted findings are kept in `findings.jsonl` and one-off proposals are dropped, so the data stays clean and chart buckets stay stable.
+
+Charts split those rows, bucketing findings by `finding_type` alone (coarse enough to avoid one- to two-segment buckets) and coloring by the metric's aggregated polarity:
 
 | Chart | Rows used | Category string |
 |---|---|---|
 | Sentiment | `finding_type == "sentiment"` | `{value}:{target}` (e.g. `negative:billing experience`) |
-| Findings | all other types | `{finding_type}:{value}` (e.g. `renewal_risk:…`) |
+| Findings | all other types | `{finding_type}` (e.g. `renewal_risk`) |
 
-`chart_point_id` is `sentiment|…` or `finding|…` plus source, month, and that category. Because text is redacted, the model sometimes puts `[PERSON_xx]` into `target`/`value`, which can pollute labels — see [BONUS.md](BONUS.md) for a speaker-role fix.
+`chart_point_id` is `sentiment|…` or `finding|…` plus source, month, and that category. Because text is redacted, the model sometimes puts `[PERSON_xx]` into `target`, which can pollute labels — see [BONUS.md](BONUS.md) for a speaker-role fix.
 
 ### 8. Aggregation + analytics
 
 Pandas builds **segment-based** rates (not call- or customer-based). `metrics.jsonl` stores numerator, denominator, rate, and `distinct_transcripts`. `metric_contributors.jsonl` stores **numerator-only** lineage (denominator membership lists are omitted as redundant).
 
-Monthly buckets are calendar months of `meeting-info` `startTime` (`YYYY-MM`) — e.g. `2026-03` means calls **in** March 2026, not “everything before March.” Plotly may display that as a date like “March 1, 2026”; treat it as the month label.
+Monthly buckets are calendar months of `meeting-info` `startTime` (`YYYY-MM`) — e.g. `2026-03` means calls **in** March 2026, not “everything before March.” Charts force a categorical x-axis so labels stay as `YYYY-MM` instead of being parsed as dates.
 
 Plotly HTML lands under `analytical_stage/html/`.
 
@@ -136,7 +138,7 @@ Shared chart behavior:
 - Hover shows segment numerator/denominator, rate, transcript count, and `chart_point_id`
 - Sticky **copy bar**: hover fills a selectable `chart_point_id`; **Copy** or click the bar to copy
 - Full-viewport layout; legend under the plot
-- Sentiment/findings colors: **greens** for positive-leaning signals, **reds** for negative-leaning (findings mapped by type, e.g. `opportunity` vs `renewal_risk`)
+- Sentiment/findings colors: **greens** for positive-leaning signals, **reds** for negative-leaning, driven by each finding's LLM-assigned `value` polarity (a bucket takes the majority polarity of its findings)
 
 Small denominators are directional, not statistically strong.
 

@@ -11,6 +11,10 @@ from transcript_intelligence.models import (
     RedactedUtterance,
     SourceSet,
 )
+from transcript_intelligence.remote_llm import (
+    TokenUsage,
+    _parse_with_retries,
+)
 
 log = get_logger(__name__)
 
@@ -37,45 +41,34 @@ async def _classify_one(
     transcript_id: str,
     utterances: list[RedactedUtterance],
     semaphore: asyncio.Semaphore,
-) -> Classification:
+) -> tuple[Classification, TokenUsage]:
     window = utterances[: settings.classify_utterance_window]
     dialogue = "\n".join(
         f"{item.speaker_name}: {item.sentence}" for item in window
     )
     async with semaphore:
-        for attempt in range(settings.llm_maximum_attempts):
-            try:
-                response = await client.responses.parse(
-                    model=settings.llm_model,
-                    instructions=CLASSIFY_INSTRUCTIONS,
-                    input=dialogue,
-                    text_format=ClassificationResponse,
-                )
-                parsed = response.output_parsed
-                assert parsed is not None
-                return Classification(
-                    transcript_id=transcript_id,
-                    source_set=parsed.source_set,
-                    confidence=parsed.confidence,
-                    rationale=parsed.rationale,
-                    low_confidence=(
-                        parsed.confidence
-                        < settings.classify_confidence_threshold
-                    ),
-                )
-            except Exception as error:
-                if attempt + 1 >= settings.llm_maximum_attempts:
-                    raise
-                delay = settings.llm_initial_backoff_seconds * (2**attempt)
-                log.warning(
-                    "classify call failed, retrying",
-                    transcript_id=transcript_id,
-                    attempt=attempt + 1,
-                    error=str(error),
-                    delay=delay,
-                )
-                await asyncio.sleep(delay)
-    raise RuntimeError(f"classify failed for {transcript_id}")
+        parsed, usage = await _parse_with_retries(
+            client,
+            settings,
+            CLASSIFY_INSTRUCTIONS,
+            dialogue,
+            ClassificationResponse,
+            transcript_id,
+        )
+    assert isinstance(parsed, ClassificationResponse)
+    return (
+        Classification(
+            transcript_id=transcript_id,
+            source_set=parsed.source_set,
+            confidence=parsed.confidence,
+            rationale=parsed.rationale,
+            low_confidence=(
+                parsed.confidence
+                < settings.classify_confidence_threshold
+            ),
+        ),
+        usage,
+    )
 
 
 async def classify_transcripts(
@@ -97,10 +90,12 @@ async def classify_transcripts(
         )
     ]
     results: list[Classification] = []
+    usage_total = TokenUsage()
     done = 0
     for task in asyncio.as_completed(tasks):
-        result = await task
+        result, usage = await task
         results.append(result)
+        usage_total = usage_total + usage
         done += 1
         if done % 10 == 0 or done == len(tasks):
             log.info("classify progress", done=done, total=len(tasks))
@@ -110,6 +105,8 @@ async def classify_transcripts(
         transcripts=len(results),
         low_confidence=low,
         threshold=settings.classify_confidence_threshold,
+        input_tokens=usage_total.input_tokens,
+        output_tokens=usage_total.output_tokens,
         distribution=json.dumps(
             {
                 source.value: sum(
