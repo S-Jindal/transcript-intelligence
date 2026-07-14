@@ -30,7 +30,6 @@ class FindingItem(BaseModel):
     target: str
     value: str
     reason: str
-    confidence: float = Field(ge=0, le=1)
     intensity: int | None = Field(default=None, ge=1, le=5)
 
 
@@ -45,15 +44,109 @@ Return a concise business label and one-sentence description.
 Do not invent details absent from the evidence.
 """.strip()
 
-FINDINGS_INSTRUCTIONS = """
-Extract sentiment and business findings from the redacted segment of transcript with interactions between customers and account managers or support staff.
-Valence values must be positive or negative (treat uncertainty as negative).
-Allowed finding_type values include:
-sentiment, customer_effort, frustration, resolution, objection,
-renewal_risk, feature_request, opportunity, commitment.
-Also base your finding with a reason and the confidence level.
+CUSTOMER_FINDINGS_INSTRUCTIONS = """
+Extract sentiment and business findings from the redacted segment of a
+customer-facing call (customer support or account manager).
 If nothing meaningful is present, return an empty findings list.
+
+Return zero or more objects. Each object must use these fields:
+
+finding_type:
+  One of: sentiment, process_friction, resolution, objection,
+  renewal_risk, feature_request, opportunity, commitment,
+  competitive_risk.
+  Use sentiment for any affective signal toward a concrete target,
+  including praise, satisfaction, frustration, anger, or
+  dissatisfaction. 
+  Use process_friction when the customer had to do excessive work to
+  make progress (repeated retries, manual workarounds, long waits,
+  re-explaining the issue, or ticket ping-pong). This is about burden
+  of process, not mood alone — pair with sentiment when both apply.
+  Use competitive_risk when a competitor product, vendor, or
+  alternative is named or clearly implied as leverage, evaluation,
+  or displacement pressure.
+  Use the remaining types only for the matching business signal.
+
+target:
+  The concrete subject of the finding (product, feature, process,
+  billing item, policy, competitor name, or speaker role such as
+  customer or agent). Prefer role names over redacted person tokens
+  like [PERSON_01]. Keep it short and reusable across calls.
+
+value:
+  For finding_type=sentiment: exactly "positive" or "negative"
+  (treat uncertainty, hesitation, mixed tone, or frustration as
+  negative).
+  For competitive_risk: a concise phrase naming the competitor and
+  the pressure.
+  For all other finding_type values: a concise phrase stating the
+  finding itself, not a full-sentence paraphrase of the segment.
+
+reason:
+  One or two sentences explaining why this finding is warranted,
+  grounded only in evidence present in the segment. Do not invent
+  details that are not in the text.
+
+intensity:
+  Optional integer from 1 (mild) to 5 (severe). Prefer including it
+  for negative sentiment, renewal_risk, process_friction, and
+  competitive_risk. Omit it when intensity is not meaningful.
 """.strip()
+
+INTERNAL_FINDINGS_INSTRUCTIONS = """
+Extract sentiment and business findings from the redacted segment of an
+internal discussion (engineering, product, support ops, or leadership).
+If nothing meaningful is present, return an empty findings list.
+
+Return zero or more objects. Each object must use these fields:
+
+finding_type:
+  One of: sentiment, operational_risk, delivery_risk, competitive_risk,
+  renewal_risk, opportunity, commitment, capacity_constraint.
+  Use sentiment for team tone toward a product, incident, roadmap item,
+  or process (including frustration or confidence).
+  Use operational_risk for reliability, outages, monitoring gaps, or
+  customer-impacting incidents discussed internally.
+  Use delivery_risk for slip risk on launches, fixes, or milestones.
+  Use competitive_risk when a competitor is named as win/loss pressure
+  or product gap motivation.
+  Use renewal_risk when an at-risk account or renewal is discussed.
+  Use opportunity for expansion, packaging, or product bets.
+  Use commitment for explicit internal ownership or follow-ups.
+  Use capacity_constraint when staffing, bandwidth, or prioritization
+  is blocking work.
+
+target:
+  The concrete subject (product, service, incident, account theme,
+  competitor, or team process). Prefer role or team labels over
+  redacted person tokens like [PERSON_01]. Keep it short.
+
+value:
+  For finding_type=sentiment: exactly "positive" or "negative"
+  (treat uncertainty or mixed tone as negative).
+  For competitive_risk: a concise phrase naming the competitor and
+  the pressure.
+  For all other finding_type values: a concise phrase stating the
+  finding itself, not a full-sentence paraphrase of the segment.
+
+reason:
+  One or two sentences explaining why this finding is warranted,
+  grounded only in evidence present in the segment. Do not invent
+  details that are not in the text.
+
+intensity:
+  Optional integer from 1 (mild) to 5 (severe). Prefer including it
+  for negative sentiment, operational_risk, delivery_risk,
+  renewal_risk, and competitive_risk. Omit it when intensity is not
+  meaningful.
+""".strip()
+
+
+def _findings_instructions(source_set: SourceSet) -> str:
+    if source_set == SourceSet.internal_discuss:
+        return INTERNAL_FINDINGS_INSTRUCTIONS
+    return CUSTOMER_FINDINGS_INSTRUCTIONS
+
 
 
 async def _parse_with_retries(
@@ -166,12 +259,6 @@ async def extract_findings(
     segments: list[Segment],
     stage_dir: Path,
 ) -> list[Finding]:
-    customer_segments = [
-        segment
-        for segment in segments
-        if segment.source_set
-        in {SourceSet.customer_support, SourceSet.account_manager}
-    ]
     semaphore = asyncio.Semaphore(settings.llm_concurrency)
 
     async def extract_one(segment: Segment) -> list[Finding]:
@@ -180,7 +267,7 @@ async def extract_findings(
             parsed = await _parse_with_retries(
                 client,
                 settings,
-                FINDINGS_INSTRUCTIONS,
+                _findings_instructions(segment.source_set),
                 segment.text,
                 FindingsResponse,
                 request_id,
@@ -197,7 +284,6 @@ async def extract_findings(
                 target=item.target,
                 value=item.value,
                 reason=item.reason,
-                confidence=item.confidence,
                 intensity=item.intensity,
                 model=settings.llm_model,
                 prompt_version=settings.findings_prompt_version,
@@ -205,7 +291,7 @@ async def extract_findings(
             for index, item in enumerate(parsed.findings)
         ]
 
-    tasks = [extract_one(segment) for segment in customer_segments]
+    tasks = [extract_one(segment) for segment in segments]
     all_findings: list[Finding] = []
     done = 0
     for task in asyncio.as_completed(tasks):

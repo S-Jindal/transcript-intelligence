@@ -8,7 +8,10 @@ from openai import AsyncOpenAI
 from sentence_transformers import SentenceTransformer
 
 from transcript_intelligence.aggregation import aggregate_metrics
-from transcript_intelligence.analytics import write_charts
+from transcript_intelligence.analytics import (
+    write_charts,
+    write_topic_hierarchy,
+)
 from transcript_intelligence.classify import classify_transcripts
 from transcript_intelligence.config import Settings
 from transcript_intelligence.execution import Execution, StageStatus
@@ -311,7 +314,14 @@ def run_pipeline(
     )
 
     def analytics() -> None:
-        write_charts(metrics, execution.stage_dir("analytical"))
+        stage_dir = execution.stage_dir("analytical")
+        write_charts(metrics, stage_dir)
+        write_topic_hierarchy(
+            labels,
+            dependencies.embedding_model,
+            settings.topic_merge_similarity_threshold,
+            stage_dir,
+        )
 
     _run_stage(execution, "analytics", analytics)
     execution.mark_complete()

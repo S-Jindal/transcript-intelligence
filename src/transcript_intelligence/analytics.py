@@ -1,13 +1,17 @@
+from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
+from scipy.spatial.distance import pdist
+from sentence_transformers import SentenceTransformer
 
-from transcript_intelligence.io_utils import write_json
+from transcript_intelligence.io_utils import read_json, write_json
 from transcript_intelligence.logging_setup import get_logger
-from transcript_intelligence.models import Metric
+from transcript_intelligence.models import Metric, TopicLabel
 
 log = get_logger(__name__)
 
@@ -41,11 +45,15 @@ _NEUTRAL_SHADES = (
     "#475569",
 )
 _NEGATIVE_FINDING_TYPES = {
-    "frustration",
+    "process_friction",
     "customer_effort",
     "objection",
     "renewal_risk",
     "competitive_risk",
+    "operational_risk",
+    "delivery_risk",
+    "capacity_constraint",
+    "frustration",
 }
 _POSITIVE_FINDING_TYPES = {
     "opportunity",
@@ -53,6 +61,12 @@ _POSITIVE_FINDING_TYPES = {
     "commitment",
     "resolution",
 }
+_SOURCE_SET_COLORS = {
+    "customer-support": ("#1D4ED8", "blue"),
+    "account-manager": ("#047857", "green"),
+    "internal-discuss": ("#7E22CE", "purple"),
+}
+_CROSS_SOURCE_COLOR = "#0F172A"
 
 
 def _frame(metrics: list[Metric], metric_type: str) -> pd.DataFrame:
@@ -508,3 +522,262 @@ def write_charts(metrics: list[Metric], stage_dir: Path) -> None:
 
     write_json(stage_dir / "chart_manifest.json", manifest)
     log.info("charts written", charts=len(manifest))
+
+
+def _dominant_source_set(topic: TopicLabel) -> str:
+    return max(topic.source_distribution.items(), key=lambda item: item[1])[0]
+
+
+def _source_short_name(source: str) -> str:
+    return {
+        "customer-support": "support",
+        "account-manager": "am",
+        "internal-discuss": "internal",
+    }.get(source, source)
+
+
+def _branch_colors(
+    merge_tree,
+    leaf_sources: list[str],
+) -> dict[int, str]:
+    leaf_count = len(leaf_sources)
+    colors = {
+        index: _SOURCE_SET_COLORS[source][0]
+        for index, source in enumerate(leaf_sources)
+    }
+    for merge_index, (left, right, _, _) in enumerate(merge_tree):
+        left_color = colors[int(left)]
+        right_color = colors[int(right)]
+        colors[leaf_count + merge_index] = (
+            left_color
+            if left_color == right_color
+            else _CROSS_SOURCE_COLOR
+        )
+    return colors
+
+
+def write_topic_hierarchy(
+    topics: list[TopicLabel],
+    embedding_model: SentenceTransformer,
+    similarity_threshold: float,
+    stage_dir: Path,
+) -> None:
+    html_dir = stage_dir / "html"
+    html_dir.mkdir(parents=True, exist_ok=True)
+    path = html_dir / "topic_hierarchy.html"
+    if len(topics) < 2:
+        _empty_chart(path, "topic hierarchy")
+        return
+
+    matrix = embedding_model.encode(
+        [f"{topic.label}: {topic.description}" for topic in topics],
+        normalize_embeddings=True,
+        show_progress_bar=False,
+        convert_to_numpy=True,
+    )
+    distance_threshold = 1.0 - similarity_threshold
+    leaf_sources = [_dominant_source_set(topic) for topic in topics]
+    leaf_labels = [
+        (
+            f"{topic.label} "
+            f"[{_source_short_name(source)}:{topic.cluster_id}]"
+        )
+        for topic, source in zip(topics, leaf_sources)
+    ]
+    merge_tree = linkage(pdist(matrix, metric="cosine"), method="average")
+    branch_colors = _branch_colors(merge_tree, leaf_sources)
+    layout = dendrogram(merge_tree, no_plot=True, labels=leaf_labels)
+
+    # Match each scipy U to its merge by height, then color arms by child
+    # and the vertical join by parent — so same-set leaves stay blue/green/
+    # purple until a cross-set merge, after which the join is black.
+    merge_by_height = {
+        float(row[2]): (
+            int(row[0]),
+            int(row[1]),
+            len(topics) + index,
+        )
+        for index, row in enumerate(merge_tree)
+    }
+    figure = go.Figure()
+    for xs, ys in zip(layout["dcoord"], layout["icoord"]):
+        height = float(xs[1])
+        left_id, right_id, parent_id = merge_by_height[min(
+            merge_by_height,
+            key=lambda value: abs(value - height),
+        )]
+        segments = (
+            (xs[:2], ys[:2], branch_colors[left_id]),
+            (xs[1:3], ys[1:3], branch_colors[parent_id]),
+            (xs[2:], ys[2:], branch_colors[right_id]),
+        )
+        for segment_x, segment_y, color in segments:
+            figure.add_trace(
+                go.Scatter(
+                    x=segment_x,
+                    y=segment_y,
+                    mode="lines",
+                    line={"color": color, "width": 2},
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+    figure.add_vline(
+        x=distance_threshold,
+        line_dash="dash",
+        line_color="#0F172A",
+        annotation_text=(
+            f"merges stop below similarity {similarity_threshold:.2f}"
+        ),
+        annotation_position="top",
+    )
+
+    leaf_position_by_name = {
+        name: (index + 0.5) * 10
+        for index, name in enumerate(layout["ivl"])
+    }
+    source_by_label = dict(zip(leaf_labels, leaf_sources))
+    for source, (color, color_name) in _SOURCE_SET_COLORS.items():
+        members = [
+            (topic, label)
+            for topic, label, leaf_source in zip(
+                topics, leaf_labels, leaf_sources
+            )
+            if leaf_source == source
+        ]
+        if not members:
+            continue
+        figure.add_trace(
+            go.Scatter(
+                x=[0] * len(members),
+                y=[leaf_position_by_name[label] for _, label in members],
+                mode="markers",
+                marker={"color": color, "size": 11},
+                name=f"{source} ({color_name})",
+                showlegend=True,
+                hovertext=[
+                    f"{topic.label}<br>{topic.topic_id}"
+                    f"<br>segments={topic.cluster_size}"
+                    for topic, _ in members
+                ],
+                hoverinfo="text",
+            )
+        )
+    figure.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="lines",
+            line={"color": _CROSS_SOURCE_COLOR, "width": 2},
+            name="cross-source merge (black)",
+            showlegend=True,
+            hoverinfo="skip",
+        )
+    )
+
+    label_annotations = [
+        {
+            "x": 0,
+            "y": leaf_position_by_name[name],
+            "xref": "x",
+            "yref": "y",
+            "text": name,
+            "showarrow": False,
+            "xanchor": "right",
+            "xshift": -12,
+            "font": {
+                "size": 12,
+                "color": _SOURCE_SET_COLORS[source_by_label[name]][0],
+            },
+        }
+        for name in layout["ivl"]
+    ]
+
+    figure.update_layout(
+        title={
+            "text": (
+                "Topic hierarchy across source sets "
+                "(label + description embeddings, average linkage)"
+            ),
+            "x": 0.02,
+            "xanchor": "left",
+        },
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "right",
+            "x": 1,
+        },
+        xaxis={
+            "title": "cosine distance (1 − similarity)",
+            "range": [0, max(distance_threshold * 1.15, 0.5)],
+        },
+        yaxis={
+            "tickmode": "array",
+            "tickvals": [
+                leaf_position_by_name[name] for name in layout["ivl"]
+            ],
+            "showticklabels": False,
+            "showgrid": False,
+        },
+        annotations=label_annotations,
+        height=max(760, 30 * len(topics) + 220),
+        margin={"l": 360, "r": 60, "t": 110, "b": 70},
+        plot_bgcolor="#F8FAFC",
+        paper_bgcolor="#FFFFFF",
+        autosize=True,
+        showlegend=True,
+    )
+    figure.write_html(
+        str(path),
+        include_plotlyjs="cdn",
+        full_html=True,
+        default_width="100%",
+        config={"responsive": True, "displayModeBar": True},
+    )
+
+    grouped: dict[int, list[TopicLabel]] = defaultdict(list)
+    for topic, group_id in zip(
+        topics,
+        fcluster(merge_tree, t=distance_threshold, criterion="distance"),
+    ):
+        grouped[int(group_id)].append(topic)
+    write_json(
+        stage_dir / "topic_hierarchy_groups.json",
+        {
+            "similarity_threshold": similarity_threshold,
+            "groups": [
+                {
+                    "group_id": group_id,
+                    "source_sets": sorted(
+                        {_dominant_source_set(topic) for topic in members}
+                    ),
+                    "topics": [
+                        {
+                            "topic_id": topic.topic_id,
+                            "label": topic.label,
+                            "source_set": _dominant_source_set(topic),
+                        }
+                        for topic in members
+                    ],
+                }
+                for group_id, members in sorted(
+                    grouped.items(),
+                    key=lambda item: -len(item[1]),
+                )
+            ],
+        },
+    )
+
+    manifest_path = stage_dir / "chart_manifest.json"
+    manifest = read_json(manifest_path) if manifest_path.exists() else {}
+    manifest["topic_hierarchy"] = "html/topic_hierarchy.html"
+    write_json(manifest_path, manifest)
+    log.info(
+        "topic hierarchy written",
+        topics=len(topics),
+        groups=len(grouped),
+        similarity_threshold=similarity_threshold,
+    )

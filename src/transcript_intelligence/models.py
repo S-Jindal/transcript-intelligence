@@ -201,10 +201,11 @@ class Finding(StrictModel):
     target: str
     value: str
     reason: str
-    confidence: float = Field(ge=0, le=1)
     intensity: int | None = Field(default=None, ge=1, le=5)
     model: str
     prompt_version: str
+    # Accepted when reloading older findings.jsonl; not requested from the LLM.
+    confidence: float | None = Field(default=None, ge=0, le=1)
 
 
 class Metric(StrictModel):

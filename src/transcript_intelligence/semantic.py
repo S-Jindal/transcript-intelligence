@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -35,11 +35,11 @@ def build_topic_model(minimum_cluster_size: int, random_state: int):
     from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, CountVectorizer
     from umap import UMAP
 
-    # Strip [PERSON_01]-style tags (case-insensitive) before tokenization.
-    placeholder = re.compile(r"\[[A-Za-z][A-Za-z0-9_]*_\d+\]")
+    # # Strip [PERSON_01]-style tags (case-insensitive) before tokenization.
+    # placeholder = re.compile(r"\[[A-Za-z][A-Za-z0-9_]*_\d+\]")
 
-    def preprocess(text: str) -> str:
-        return placeholder.sub(" ", text).lower()
+    # def preprocess(text: str) -> str:
+    #     return placeholder.sub(" ", text).lower()
 
     conversational_stops = {
         "yeah",
@@ -99,7 +99,8 @@ def build_topic_model(minimum_cluster_size: int, random_state: int):
         )
     }
     stop_words = list(
-        ENGLISH_STOP_WORDS | conversational_stops | person_stops
+        # ENGLISH_STOP_WORDS | conversational_stops | person_stops
+        ENGLISH_STOP_WORDS
     )
 
     return BERTopic(
@@ -120,7 +121,7 @@ def build_topic_model(minimum_cluster_size: int, random_state: int):
             stop_words=stop_words,
             ngram_range=(1, 2),
             min_df=2,
-            preprocessor=preprocess,
+            # preprocessor=preprocess,
         ),
         # Softens high within-cluster TF so fillers rank lower in c-TF-IDF.
         ctfidf_model=ClassTfidfTransformer(reduce_frequent_words=True),
@@ -443,6 +444,17 @@ def cluster_segments(
         assignments=len(all_assignments),
         topics=len([item for item in all_metadata if not item.is_outlier]),
     )
+    outlier_counts = Counter(
+        assignment.source_set.value
+        for assignment in all_assignments
+        if assignment.is_outlier
+    )
+    for source in SourceSet:
+        log.info(
+            "outlier count",
+            source_set=source.value,
+            outliers=outlier_counts.get(source.value, 0),
+        )
     return (
         all_assignments,
         all_metadata,

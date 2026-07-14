@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     maximum_segment_tokens: int = Field(default=500, ge=1, le=500)
     semantic_similarity_threshold: float = Field(default=0.35, ge=-1, le=1)
+    topic_merge_similarity_threshold: float = Field(default=0.6, ge=-1, le=1)
     minimum_cluster_size: int = Field(default=5, ge=2)
     centroid_segment_count: int = Field(default=3, ge=2, le=3)
     topic_random_state: int = 42
@@ -33,7 +34,7 @@ class Settings(BaseSettings):
     classify_confidence_threshold: float = Field(default=0.7, ge=0, le=1)
 
     topic_prompt_version: str = "topic-label-v1"
-    findings_prompt_version: str = "segment-findings-v1"
+    findings_prompt_version: str = "segment-findings-v3"
 
     allowlist: str = "Aegis Cloud Security,Aegis Identity"
     account_patterns: str = (

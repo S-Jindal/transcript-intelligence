@@ -90,7 +90,9 @@ When a stage is re-run (`pending` / not `complete`), its output directory is del
 
 ### 7. Sentiment / findings (LLM)
 
-Customer-facing segments only (support + account-manager). One structured LLM call per segment returns zero or more rows. Each row has `finding_type`, `target`, `value`, `reason`, and confidence. Provider `sentimentType` on raw utterances is ignored.
+All call types. Each segment gets one structured LLM call using a prompt chosen by source set: customer-facing (support + account-manager) vs internal-discuss. Each row has `finding_type`, `target`, `value`, `reason`, and optional `intensity`.
+
+Customer types emphasize buyer signals (`process_friction`, `renewal_risk`, `feature_request`, …). Internal types emphasize operating signals (`operational_risk`, `delivery_risk`, `capacity_constraint`, …). Affective signals (including frustration) use `finding_type=sentiment` with `value` of `positive` or `negative`. Competitor pressure uses `competitive_risk` in both prompts. Provider `sentimentType` on raw utterances is ignored.
 
 Charts split those rows:
 
@@ -123,6 +125,9 @@ Under `analytical_stage/html/`:
 | `topic_prevalence_all_time.html` | Top **5** topics by segment count per call type |
 | `sentiment_distribution.html` | Top **7** sentiment categories per call type and month |
 | `finding_prevalence.html` | Top **7** finding categories per call type and month |
+| `topic_hierarchy.html` | Dendrogram of **all** topic labels (both topic spaces) clustered by `label: description` embeddings |
+
+The topic hierarchy is a single agglomerative tree (average linkage, cosine distance) over every topic from `topics.jsonl`, so related themes across customer-support, account-manager, and internal-discuss sit in the same branch. Merging stops once similarity drops below `TOPIC_MERGE_SIMILARITY_THRESHOLD` (default `0.6`); the dashed cut line marks that point and leaf markers are colored by each topic's dominant source set (legend included). The resulting merged groups are written to `analytical_stage/topic_hierarchy_groups.json`, where cross-set groups expose inter-set relationships (e.g. an internal outage postmortem topic grouped with customer outage escalation topics).
 
 Shared chart behavior:
 
@@ -131,7 +136,7 @@ Shared chart behavior:
 - Hover shows segment numerator/denominator, rate, transcript count, and `chart_point_id`
 - Sticky **copy bar**: hover fills a selectable `chart_point_id`; **Copy** or click the bar to copy
 - Full-viewport layout; legend under the plot
-- Sentiment/findings colors: **greens** for positive-leaning signals, **reds** for negative-leaning (findings mapped by type, e.g. `opportunity` vs `frustration`)
+- Sentiment/findings colors: **greens** for positive-leaning signals, **reds** for negative-leaning (findings mapped by type, e.g. `opportunity` vs `renewal_risk`)
 
 Small denominators are directional, not statistically strong.
 
@@ -157,7 +162,7 @@ Low-confidence call-type labels: `classify_stage/review_queue.jsonl`.
 
 ## Bonus ideas
 
-See [BONUS.md](BONUS.md) (e.g. infer speaker **roles** during classify so charts say `positive:customer` instead of `positive:[PERSON_02]`).
+See [BONUS.md](BONUS.md) 
 
 ## Deferred
 

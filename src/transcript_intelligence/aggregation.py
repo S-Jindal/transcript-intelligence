@@ -112,11 +112,15 @@ def aggregate_metrics(
                 for row in members
             )
 
-    customer_segments = [
+    finding_segments = [
         segment
         for segment in segments
         if segment.source_set
-        in {SourceSet.customer_support, SourceSet.account_manager}
+        in {
+            SourceSet.customer_support,
+            SourceSet.account_manager,
+            SourceSet.internal_discuss,
+        }
     ]
     findings_by_segment = defaultdict(list)
     for finding in findings:
@@ -125,10 +129,11 @@ def aggregate_metrics(
     for source in (
         SourceSet.customer_support.value,
         SourceSet.account_manager.value,
+        SourceSet.internal_discuss.value,
     ):
         source_segments = [
             segment
-            for segment in customer_segments
+            for segment in finding_segments
             if segment.source_set.value == source
         ]
         by_month: dict[str, list[Segment]] = defaultdict(list)
